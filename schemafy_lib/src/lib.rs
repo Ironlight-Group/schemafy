@@ -102,77 +102,16 @@ fn remove_excess_underscores(s: &str) -> String {
 }
 
 pub fn str_to_ident(s: &str) -> syn::Ident {
-    if s.is_empty() {
-        return syn::Ident::new("empty_", Span::call_site());
-    }
-
-    if s.chars().all(|c| c == '_') {
-        return syn::Ident::new("underscore_", Span::call_site());
-    }
-
-    let s = replace_invalid_identifier_chars(s);
-    let s = replace_numeric_start(&s);
-    let s = remove_excess_underscores(&s);
-
-    if s.is_empty() {
-        return syn::Ident::new("invalid_", Span::call_site());
-    }
-
-    let keywords = [
-        "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
-        "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
-        "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
-        "where", "while", "abstract", "become", "box", "do", "final", "macro", "override", "priv",
-        "typeof", "unsized", "virtual", "yield", "async", "await", "try",
-    ];
-    if keywords.iter().any(|&keyword| keyword == s) {
-        return syn::Ident::new(&format!("{}_", s), Span::call_site());
-    }
-
     syn::Ident::new(&s, Span::call_site())
 }
 
 fn rename_keyword(prefix: &str, s: &str) -> Option<TokenStream> {
-    let n = str_to_ident(s);
-
-    if n == s {
-        return None;
-    }
-
-    if prefix.is_empty() {
-        Some(quote! {
-            #[serde(rename = #s)]
-            #n
-        })
-    } else {
-        let prefix = syn::Ident::new(prefix, Span::call_site());
-        Some(quote! {
-            #[serde(rename = #s)]
-            #prefix #n
-        })
-    }
+    return None;
 }
 
 fn field(s: &str) -> TokenStream {
-    if let Some(t) = rename_keyword("pub", s) {
-        return t;
-    }
-    let snake = s.to_snake_case();
-    if snake == s && !snake.contains(|c: char| c == '$' || c == '#') {
-        let field = syn::Ident::new(s, Span::call_site());
-        return quote!( pub #field );
-    }
-
-    let field = if snake.is_empty() {
-        syn::Ident::new("underscore", Span::call_site())
-    } else {
-        str_to_ident(&snake)
-    };
-
-    quote! {
-        #[serde(rename = #s)]
-        pub #field
-    }
+    let field = syn::Ident::new(s, Span::call_site());
+    return quote!( pub #field );
 }
 
 fn merge_option<T, F>(mut result: &mut Option<T>, r: &Option<T>, f: F)
@@ -599,27 +538,12 @@ impl<'r> Expander<'r> {
         let name = syn::Ident::new(&pascal_case_name, Span::call_site());
         let is_struct =
             !fields.is_empty() || schema.additional_properties == Some(Value::Bool(false));
-        let serde_rename = if name == original_name {
-            None
-        } else {
-            Some(quote! {
-                #[serde(rename = #original_name)]
-            })
-        };
+
         let is_enum = schema.enum_.as_ref().map_or(false, |e| !e.is_empty());
         let type_decl = if is_struct {
-            let serde_deny_unknown = if schema.additional_properties == Some(Value::Bool(false))
-                && schema.pattern_properties.is_empty()
-            {
-                Some(quote! { #[serde(deny_unknown_fields)] })
-            } else {
-                None
-            };
             if default {
                 quote! {
                     #[derive(Clone, PartialEq, Debug, Default, Deserialize, Serialize)]
-                    #serde_rename
-                    #serde_deny_unknown
                     pub struct #name {
                         #(#fields),*
                     }
@@ -627,8 +551,6 @@ impl<'r> Expander<'r> {
             } else {
                 quote! {
                     #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
-                    #serde_rename
-                    #serde_deny_unknown
                     pub struct #name {
                         #(#fields),*
                     }
@@ -652,7 +574,7 @@ impl<'r> Expander<'r> {
                     .enumerate()
                     .map(|(idx, name)| (&values[idx], name))
                     .flat_map(|(value, name)| {
-                        let pascal_case_variant = name.to_pascal_case();
+                        let pascal_case_variant = name;
                         let variant_name =
                             rename_keyword("", &pascal_case_variant).unwrap_or_else(|| {
                                 let v = syn::Ident::new(&pascal_case_variant, Span::call_site());
@@ -660,7 +582,6 @@ impl<'r> Expander<'r> {
                             });
                         match value {
                             Value::String(ref s) => Some(quote! {
-                                #[serde(rename = #s)]
                                 #variant_name
                             }),
                             Value::Number(ref n) => {
@@ -686,21 +607,14 @@ impl<'r> Expander<'r> {
                     .iter()
                     .flat_map(|v| match *v {
                         Value::String(ref v) => {
-                            let pascal_case_variant = v.to_pascal_case();
+                            let pascal_case_variant = v;
                             let variant_name = rename_keyword("", &pascal_case_variant)
                                 .unwrap_or_else(|| {
                                     let v =
                                         syn::Ident::new(&pascal_case_variant, Span::call_site());
                                     quote!(#v)
                                 });
-                            Some(if pascal_case_variant == *v {
-                                variant_name
-                            } else {
-                                quote! {
-                                    #[serde(rename = #v)]
-                                    #variant_name
-                                }
-                            })
+                            Some(variant_name)
                         }
                         Value::Null => {
                             optional = true;
@@ -716,7 +630,6 @@ impl<'r> Expander<'r> {
                     quote! {
                         pub type #name = Option<#enum_name>;
                         #[derive(Clone, PartialEq, Debug, Serialize_repr, Deserialize_repr)]
-                        #serde_rename
                         #[repr(i64)]
                         pub enum #enum_name {
                             #(#variants),*
@@ -726,7 +639,6 @@ impl<'r> Expander<'r> {
                     quote! {
                         pub type #name = Option<#enum_name>;
                         #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
-                        #serde_rename
                         pub enum #enum_name {
                             #(#variants),*
                         }
@@ -735,7 +647,6 @@ impl<'r> Expander<'r> {
             } else if repr_i64 {
                 quote! {
                     #[derive(Clone, PartialEq, Debug, Serialize_repr, Deserialize_repr)]
-                    #serde_rename
                     #[repr(i64)]
                     pub enum #name {
                         #(#variants),*
@@ -744,7 +655,6 @@ impl<'r> Expander<'r> {
             } else {
                 quote! {
                     #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
-                    #serde_rename
                     pub enum #name {
                         #(#variants),*
                     }
